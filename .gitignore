@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual environment
+race_engineer_ai/
+venv/
+
+# Secrets
+.env
+
+# Logs
+logs/
+
+# Data and cache
+data/
+cache/
+*.parquet
+*.sqlite
+
+# OS
+.DS_Store

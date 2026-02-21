@@ -1,0 +1,14 @@
+fastf1
+pandas
+numpy
+duckdb
+pyarrow
+openai
+python-dotenv
+streamlit
+fastapi
+uvicorn
+requests
+chromadb
+sentence-transformers
+
