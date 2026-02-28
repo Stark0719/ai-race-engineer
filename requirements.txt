@@ -6,9 +6,9 @@ pyarrow
 openai
 python-dotenv
 streamlit
+plotly
 fastapi
 uvicorn
 requests
 chromadb
 sentence-transformers
-
