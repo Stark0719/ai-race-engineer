@@ -49,7 +49,7 @@ def chat_with_engineer(user_message, driver_code, base_lap_time):
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": f"You are a professional race strategy engineer. Use the following knowledge when relevant:\n\n{context}"},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message}
         ],
         tools=tools,
@@ -75,7 +75,7 @@ def chat_with_engineer(user_message, driver_code, base_lap_time):
         second_response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": f"You are a professional race strategy engineer. Use the following knowledge when relevant:\n\n{context}"},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
                 message,
                 {

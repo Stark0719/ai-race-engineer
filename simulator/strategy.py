@@ -1,5 +1,10 @@
 import random
 
+import random
+from simulator.field import generate_field
+from simulator.race_state import RaceState
+
+
 COMPOUNDS = {
     "soft":  {"pace_offset": -0.8, "deg": 0.08},
     "medium": {"pace_offset": 0.0,  "deg": 0.03},
@@ -210,4 +215,119 @@ def recommend_strategy(
         "two_stop_win_rate": two_rate,
         "pit_loss": pit_loss_time,
         "safety_car_probability": safety_car_prob
+    }
+
+def estimate_rejoin_position(
+    race_state,
+    field_lap_times,
+    remaining_laps
+):
+    pit_time = race_state.pit_loss_time
+
+    projected_time = (
+        remaining_laps * race_state.base_lap_time
+        + pit_time
+    )
+
+    positions = 1
+    for rival_time in field_lap_times:
+        rival_total = remaining_laps * rival_time
+        if rival_total < projected_time:
+            positions += 1
+
+    return positions
+
+
+def monte_carlo_with_field(
+    iterations,
+    race_state,
+    one_stop_compounds,
+    two_stop_compounds,
+    safety_car_prob=0.2
+):
+    position_results = {
+        "one_stop": [],
+        "two_stop": []
+    }
+
+    for _ in range(iterations):
+
+        # Generate simplified field
+        field = generate_field(race_state.base_lap_time)
+
+        # Safety car logic
+        if random.random() < safety_car_prob:
+            adjusted_pit_loss = race_state.pit_loss_time * 0.4
+        else:
+            adjusted_pit_loss = race_state.pit_loss_time
+
+        remaining_laps = race_state.total_laps - race_state.current_lap
+
+        # Simulate strategies (time-based)
+        _, time_1 = simulate_one_stop_compound(
+            remaining_laps,
+            race_state.base_lap_time,
+            adjusted_pit_loss,
+            *one_stop_compounds
+        )
+
+        _, time_2 = simulate_two_stop(
+            remaining_laps,
+            race_state.base_lap_time,
+            adjusted_pit_loss,
+            *two_stop_compounds
+        )
+
+        # Convert time to position
+        pos_1 = 1
+        pos_2 = 1
+
+        for rival_lap in field:
+            rival_total = remaining_laps * rival_lap
+
+            if rival_total < time_1:
+                pos_1 += 1
+
+            if rival_total < time_2:
+                pos_2 += 1
+
+        # Traffic penalty if not leading
+        if pos_1 > 1:
+            pos_1 += random.choice([0, 1])
+
+        if pos_2 > 1:
+            pos_2 += random.choice([0, 1])
+
+        position_results["one_stop"].append(pos_1)
+        position_results["two_stop"].append(pos_2)
+
+    return position_results
+
+def evaluate_position_strategy(position_results):
+
+    one_positions = position_results["one_stop"]
+    two_positions = position_results["two_stop"]
+
+    avg_one = sum(one_positions) / len(one_positions)
+    avg_two = sum(two_positions) / len(two_positions)
+
+    p1_one = one_positions.count(1) / len(one_positions)
+    p1_two = two_positions.count(1) / len(two_positions)
+
+    podium_one = sum(p <= 3 for p in one_positions) / len(one_positions)
+    podium_two = sum(p <= 3 for p in two_positions) / len(two_positions)
+
+    if avg_one < avg_two:
+        recommended = "1-stop"
+    else:
+        recommended = "2-stop"
+
+    return {
+        "recommended": recommended,
+        "avg_position_one_stop": avg_one,
+        "avg_position_two_stop": avg_two,
+        "p1_prob_one_stop": p1_one,
+        "p1_prob_two_stop": p1_two,
+        "podium_prob_one_stop": podium_one,
+        "podium_prob_two_stop": podium_two
     }
