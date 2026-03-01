@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AI Race Engineer — 3D Live View</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#111;overflow:hidden;font-family:'Courier New',monospace}
+  #container{width:100vw;height:100vh}
+  #hud{position:fixed;bottom:0;left:0;right:0;background:linear-gradient(transparent,rgba(0,0,0,0.9));padding:18px 25px 12px;color:#fff;z-index:10;display:flex;justify-content:space-between;align-items:flex-end}
+  .hb{text-align:center}.hb-big{font-size:48px;font-weight:bold;line-height:1}.hb-lbl{font-size:10px;color:#888;text-transform:uppercase;margin-top:2px}.hb-med{font-size:26px;font-weight:bold}.hb-sm{font-size:15px}
+  #gear-d{color:#0f0}#drs-d{color:#0ff;font-size:16px;font-weight:bold}
+  #comp-d{font-size:18px;font-weight:bold}
+  .c-soft{color:#F33}.c-medium{color:#FFD700}.c-hard{color:#CCC}
+  #top-hud{position:fixed;top:0;left:0;right:0;background:linear-gradient(rgba(0,0,0,0.8),transparent);padding:12px 25px;color:#fff;z-index:10;display:flex;justify-content:space-between;font-size:13px}
+  .tv{font-weight:bold;font-size:15px}
+  #overlay{position:fixed;inset:0;background:rgba(0,0,0,0.88);display:flex;flex-direction:column;justify-content:center;align-items:center;z-index:100;color:#fff}
+  #overlay h1{font-size:32px;margin-bottom:18px}
+  #overlay select,#overlay input,#overlay button{font-size:15px;padding:9px 18px;margin:4px;border:1px solid #555;background:#222;color:#fff;border-radius:5px;cursor:pointer}
+  #overlay button{background:#e10600;border:none;font-weight:bold}
+  #overlay button:hover{background:#ff1801}
+  .cr{display:flex;gap:12px;align-items:center;margin:6px 0}.cl{width:130px;text-align:right;color:#aaa}
+</style>
+</head>
+<body>
+<div id="overlay">
+  <h1>🏎️ 3D Race View</h1>
+  <div class="cr"><span class="cl">Track:</span><select id="cfg-track"></select></div>
+  <div class="cr"><span class="cl">Compound:</span><select id="cfg-comp"><option value="soft">Soft</option><option value="medium" selected>Medium</option><option value="hard">Hard</option></select></div>
+  <div class="cr"><span class="cl">Speed:</span><input id="cfg-spd" type="number" value="10" min="1" max="50" style="width:70px"></div>
+  <div class="cr"><span class="cl">Pit Lap:</span><input id="cfg-pit" type="number" value="0" min="0" style="width:70px"></div>
+  <div class="cr"><span class="cl">Pit to:</span><select id="cfg-pc"><option value="soft">Soft</option><option value="medium">Medium</option><option value="hard" selected>Hard</option></select></div>
+  <br><button onclick="startRace()">🏁 START RACE</button>
+  <p style="color:#666;margin-top:12px;font-size:11px">API must be running: python -m uvicorn api.main:app --reload</p>
+</div>
+<div id="top-hud" style="display:none">
+  <div>LAP <span class="tv" id="h-lap">1/57</span></div>
+  <div>S<span class="tv" id="h-sec">1</span></div>
+  <div>LAST <span class="tv" id="h-last">—</span></div>
+  <div>FUEL <span class="tv" id="h-fuel">110</span>kg</div>
+  <div>TEMP <span class="tv" id="h-temp">70</span>°C</div>
+  <div>WEAR <span class="tv" id="h-wear">0</span>%</div>
+  <div>P<span class="tv" id="h-pos">5</span></div>
+  <div id="h-flag"></div>
+</div>
+<div id="hud" style="display:none">
+  <div class="hb"><div class="hb-big" id="h-spd">0</div><div class="hb-lbl">KPH</div></div>
+  <div class="hb"><div class="hb-med" id="gear-d">N</div><div class="hb-lbl">GEAR</div></div>
+  <div class="hb"><div id="drs-d"></div><div class="hb-lbl" id="thr-lbl">THR 0%</div></div>
+  <div class="hb"><div id="comp-d" class="c-medium">MED</div><div class="hb-lbl" id="age-lbl">0 LAPS</div></div>
+</div>
+<div id="container"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const API='http://'+location.hostname+':8000';
+let scene,camera,renderer,carGroup,trackGroup,ws;
+let totalLaps=57,trackPts=[];
+let orbitTarget=null,orbitTheta=0,orbitPhi=Math.PI/5,orbitRadius=30;
+let isDrag=false,prevM={x:0,y:0};
+
+fetch(API+'/tracks').then(r=>r.json()).then(d=>{
+  const s=document.getElementById('cfg-track');
+  for(const[k,v]of Object.entries(d.tracks)){
+    const o=document.createElement('option');o.value=k;
+    o.textContent=v.name+' ('+v.country+')';s.appendChild(o);
+  }
+}).catch(()=>{});
+
+function initScene(){
+  scene=new THREE.Scene();
+  scene.background=new THREE.Color(0x87CEEB);
+  scene.fog=new THREE.FogExp2(0x87CEEB,0.0008);
+  renderer=new THREE.WebGLRenderer({antialias:true});
+  renderer.setSize(innerWidth,innerHeight);
+  renderer.shadowMap.enabled=true;
+  document.getElementById('container').appendChild(renderer.domElement);
+  camera=new THREE.PerspectiveCamera(60,innerWidth/innerHeight,1,5000);
+  camera.position.set(0,15,30);
+  scene.add(new THREE.AmbientLight(0xffffff,0.5));
+  const sun=new THREE.DirectionalLight(0xffffff,0.9);
+  sun.position.set(300,500,200);sun.castShadow=true;scene.add(sun);
+  scene.add(new THREE.HemisphereLight(0x87CEEB,0xC2B280,0.3));
+  const g=new THREE.Mesh(new THREE.PlaneGeometry(8000,8000),new THREE.MeshLambertMaterial({color:0xC2B280}));
+  g.rotation.x=-Math.PI/2;g.position.y=-0.2;g.receiveShadow=true;scene.add(g);
+  trackGroup=new THREE.Group();scene.add(trackGroup);
+  carGroup=new THREE.Group();scene.add(carGroup);
+  orbitTarget=new THREE.Vector3();
+  setupControls();
+  addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+}
+
+function setupControls(){
+  const el=renderer.domElement;
+  el.addEventListener('mousedown',e=>{isDrag=true;prevM={x:e.clientX,y:e.clientY}});
+  el.addEventListener('mousemove',e=>{if(!isDrag)return;orbitTheta-=(e.clientX-prevM.x)*0.005;orbitPhi=Math.max(0.05,Math.min(Math.PI/2.2,orbitPhi-(e.clientY-prevM.y)*0.005));prevM={x:e.clientX,y:e.clientY}});
+  el.addEventListener('mouseup',()=>isDrag=false);
+  el.addEventListener('mouseleave',()=>isDrag=false);
+  el.addEventListener('wheel',e=>orbitRadius=Math.max(8,Math.min(120,orbitRadius+e.deltaY*0.05)));
+  el.addEventListener('touchstart',e=>{isDrag=true;prevM={x:e.touches[0].clientX,y:e.touches[0].clientY}});
+  el.addEventListener('touchmove',e=>{if(!isDrag)return;orbitTheta-=(e.touches[0].clientX-prevM.x)*0.005;orbitPhi=Math.max(0.05,Math.min(Math.PI/2.2,orbitPhi-(e.touches[0].clientY-prevM.y)*0.005));prevM={x:e.touches[0].clientX,y:e.touches[0].clientY}});
+  el.addEventListener('touchend',()=>isDrag=false);
+}
+
+function updateCamera(){
+  camera.position.set(
+    orbitTarget.x+orbitRadius*Math.sin(orbitPhi)*Math.cos(orbitTheta),
+    orbitTarget.y+orbitRadius*Math.cos(orbitPhi),
+    orbitTarget.z+orbitRadius*Math.sin(orbitPhi)*Math.sin(orbitTheta));
+  camera.lookAt(orbitTarget);
+}
+
+function buildCar(){
+  while(carGroup.children.length)carGroup.remove(carGroup.children[0]);
+  const bm=new THREE.MeshPhongMaterial({color:0x222222,shininess:80});
+  const am=new THREE.MeshPhongMaterial({color:0xe10600,shininess:60});
+  const dm=new THREE.MeshPhongMaterial({color:0x111111});
+  const tm=new THREE.MeshPhongMaterial({color:0x1a1a1a,shininess:20});
+  // Body
+  const body=new THREE.Mesh(new THREE.BoxGeometry(1.6,0.5,5.2),bm);body.position.set(0,0.4,0);body.castShadow=true;carGroup.add(body);
+  // Nose
+  const nose=new THREE.Mesh(new THREE.ConeGeometry(0.4,2,8),bm);nose.rotation.x=Math.PI/2;nose.position.set(0,0.35,-3.5);carGroup.add(nose);
+  // Cockpit
+  carGroup.add(Object.assign(new THREE.Mesh(new THREE.BoxGeometry(0.7,0.2,1),dm),{position:new THREE.Vector3(0,0.7,0.3)}));
+  // Halo
+  const hp=new THREE.CatmullRomCurve3([new THREE.Vector3(-0.35,0.7,0.8),new THREE.Vector3(-0.25,1.1,0),new THREE.Vector3(0,1.2,-0.3),new THREE.Vector3(0.25,1.1,0),new THREE.Vector3(0.35,0.7,0.8)]);
+  carGroup.add(new THREE.Mesh(new THREE.TubeGeometry(hp,20,0.04,8,false),new THREE.MeshPhongMaterial({color:0x444444})));
+  // Sidepods
+  for(const s of[-1,1]){const p=new THREE.Mesh(new THREE.BoxGeometry(0.6,0.4,2.5),bm);p.position.set(s*0.9,0.35,0.3);carGroup.add(p)}
+  // Wings
+  const fw=new THREE.Mesh(new THREE.BoxGeometry(1.8,0.05,0.6),am);fw.position.set(0,0.15,-4);carGroup.add(fw);
+  for(const s of[-1,1]){const e=new THREE.Mesh(new THREE.BoxGeometry(0.05,0.25,0.6),am);e.position.set(s*0.9,0.2,-4);carGroup.add(e)}
+  const rw=new THREE.Mesh(new THREE.BoxGeometry(1,0.05,0.3),am);rw.position.set(0,1,2.6);carGroup.add(rw);
+  for(const s of[-1,1]){const e=new THREE.Mesh(new THREE.BoxGeometry(0.04,0.4,0.3),am);e.position.set(s*0.5,0.85,2.6);carGroup.add(e)}
+  carGroup.add(Object.assign(new THREE.Mesh(new THREE.BoxGeometry(0.08,0.5,0.08),bm),{position:new THREE.Vector3(0,0.7,2.5)}));
+  carGroup.add(Object.assign(new THREE.Mesh(new THREE.BoxGeometry(0.06,0.3,1.8),bm),{position:new THREE.Vector3(0,0.7,1.4)}));
+  // Wheels
+  [[-.85,.33,-2],[.85,.33,-2],[-.85,.35,1.8],[.85,.35,1.8]].forEach(([x,y,z])=>{
+    const w=new THREE.Mesh(new THREE.CylinderGeometry(0.33,0.33,0.28,16),tm);w.rotation.z=Math.PI/2;w.position.set(x,y,z);w.castShadow=true;carGroup.add(w);
+    const r=new THREE.Mesh(new THREE.CylinderGeometry(0.22,0.22,0.29,16),new THREE.MeshPhongMaterial({color:0xcccccc,shininess:100}));r.rotation.z=Math.PI/2;r.position.set(x,y,z);carGroup.add(r);
+  });
+  carGroup.scale.set(1.5,1.5,1.5);
+}
+
+function buildTrack(pts){
+  while(trackGroup.children.length)trackGroup.remove(trackGroup.children[0]);
+  const TW=12,kw=2;
+  const rv=[],klv=[],krv=[];
+  for(let i=0;i<pts.length-1;i++){
+    const ax=pts[i][0],ay=pts[i][1],bx=pts[i+1][0],by=pts[i+1][1];
+    const dx=bx-ax,dy=by-ay,ln=Math.sqrt(dx*dx+dy*dy)||1;
+    const nx=-dy/ln,ny=dx/ln;
+    rv.push(ax+nx*TW,0,-(ay+ny*TW),ax-nx*TW,0,-(ay-ny*TW),bx+nx*TW,0,-(by+ny*TW),bx-nx*TW,0,-(by-ny*TW),bx+nx*TW,0,-(by+ny*TW),ax-nx*TW,0,-(ay-ny*TW));
+    klv.push(ax+nx*(TW+kw),.05,-(ay+ny*(TW+kw)),ax+nx*TW,.05,-(ay+ny*TW),bx+nx*(TW+kw),.05,-(by+ny*(TW+kw)),bx+nx*TW,.05,-(by+ny*TW),bx+nx*(TW+kw),.05,-(by+ny*(TW+kw)),ax+nx*TW,.05,-(ay+ny*TW));
+    krv.push(ax-nx*TW,.05,-(ay-ny*TW),ax-nx*(TW+kw),.05,-(ay-ny*(TW+kw)),bx-nx*TW,.05,-(by-ny*TW),bx-nx*(TW+kw),.05,-(by-ny*(TW+kw)),bx-nx*TW,.05,-(by-ny*TW),ax-nx*(TW+kw),.05,-(ay-ny*(TW+kw)));
+  }
+  function addMesh(v,c,shd){const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(v,3));g.computeVertexNormals();const m=new THREE.Mesh(g,new THREE.MeshLambertMaterial({color:c}));if(shd)m.receiveShadow=true;trackGroup.add(m)}
+  addMesh(rv,0x333333,true);addMesh(klv,0xCC0000);addMesh(krv,0xCC0000);
+  for(const side of[1,-1]){
+    const lp=[];for(let i=0;i<pts.length;i++){let nx2=0,ny2=0;if(i<pts.length-1){const d2x=pts[i+1][0]-pts[i][0],d2y=pts[i+1][1]-pts[i][1],l2=Math.sqrt(d2x*d2x+d2y*d2y)||1;nx2=-d2y/l2;ny2=d2x/l2}lp.push(new THREE.Vector3(pts[i][0]+nx2*TW*side,.08,-(pts[i][1]+ny2*TW*side)))}
+    trackGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(lp),new THREE.LineBasicMaterial({color:0xffffff})));
+  }
+  const sf=new THREE.Mesh(new THREE.PlaneGeometry(TW*2,3),new THREE.MeshBasicMaterial({color:0xffffff,side:THREE.DoubleSide}));
+  sf.rotation.x=-Math.PI/2;sf.position.set(pts[0][0],.1,-pts[0][1]);trackGroup.add(sf);
+}
+
+function updateCar(x,y,h){carGroup.position.set(x,0,-y);carGroup.rotation.y=-h+Math.PI/2;orbitTarget.set(x,1.5,-y)}
+
+function updateHUD(d){
+  document.getElementById('h-spd').textContent=Math.round(d.speed_kph);
+  document.getElementById('gear-d').textContent=d.gear;
+  document.getElementById('drs-d').textContent=d.drs?'DRS':'';
+  document.getElementById('thr-lbl').textContent=d.brake>0.1?'BRK '+Math.round(d.brake*100)+'%':'THR '+Math.round(d.throttle*100)+'%';
+  const ce=document.getElementById('comp-d');ce.textContent=d.tyre_compound.toUpperCase();ce.className='c-'+d.tyre_compound;
+  document.getElementById('age-lbl').textContent=d.tyre_age_laps+' LAPS';
+  document.getElementById('h-lap').textContent=d.lap_number+'/'+totalLaps;
+  document.getElementById('h-sec').textContent=d.sector;
+  document.getElementById('h-last').textContent=d.last_lap_time>0?d.last_lap_time.toFixed(3)+'s':'—';
+  document.getElementById('h-fuel').textContent=Math.round(d.fuel_remaining_kg);
+  document.getElementById('h-temp').textContent=Math.round(d.tyre_temp_c);
+  document.getElementById('h-wear').textContent=Math.round(d.tyre_wear_pct*100);
+  document.getElementById('h-pos').textContent=d.position;
+  let f='';if(d.safety_car)f+='⚠️ SC ';if(d.in_pit)f+='🔧 PIT';
+  document.getElementById('h-flag').innerHTML=f?'<span style="color:#ff0">'+f+'</span>':'';
+}
+
+function startRace(){
+  const tk=document.getElementById('cfg-track').value;
+  if(!tk){alert('Select a track');return}
+  document.getElementById('overlay').style.display='none';
+  document.getElementById('hud').style.display='flex';
+  document.getElementById('top-hud').style.display='flex';
+  initScene();buildCar();
+  ws=new WebSocket('ws://'+location.hostname+':8000/ws/live/'+tk);
+  ws.onopen=()=>ws.send(JSON.stringify({
+    compound:document.getElementById('cfg-comp').value,
+    driver:'VER',
+    speed_multiplier:parseInt(document.getElementById('cfg-spd').value)||10,
+    pit_lap:parseInt(document.getElementById('cfg-pit').value)||0,
+    next_compound:document.getElementById('cfg-pc').value
+  }));
+  ws.onmessage=ev=>{
+    const d=JSON.parse(ev.data);
+    if(d.type==='track_info'){trackPts=d.waypoints_xy;totalLaps=d.total_laps;trackPts.push(trackPts[0]);buildTrack(trackPts);return}
+    if(d.type==='race_finished'){document.getElementById('h-flag').innerHTML='<span style="color:#0f0;font-size:16px">🏁 FINISHED</span>';return}
+    if(d.type==='telemetry'){updateCar(d.x,d.y,d.heading);updateHUD(d)}
+  };
+  ws.onerror=()=>alert('WebSocket error — is API running?');
+  (function animate(){requestAnimationFrame(animate);updateCamera();renderer.render(scene,camera)})();
+}
+</script>
+</body>
+</html>
